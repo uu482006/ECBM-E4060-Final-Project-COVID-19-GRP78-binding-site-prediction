@@ -1,0 +1,97 @@
+#Install prerequisite
+
+!pip install biopython
+
+# install clustalo command line
+!wget http://www.clustal.org/omega/clustalo-1.2.4-Ubuntu-x86_64
+!sudo chmod u+x clustalo-1.2.4-Ubuntu-x86_64
+!ln -s $(pwd)/clustalo-1.2.4-Ubuntu-x86_64 /bin/clustalo 
+
+pip install biopython --upgrade
+
+from Bio import Align
+from Bio import Entrez
+
+Entrez.email = "tq2144@columbia.edu"
+
+# query multiple sequences at once by concatenating the difference 
+# sequence IDs by commas `,`
+seq_id = ",".join(["YP_009724390.1", "YP_009825051.1", "YP_009555241.1",
+                   "NP_073551.1", "YP_003767.1", "YP_173238.1","YP_009047204.1"])
+handle = Entrez.efetch(db="protein", id=seq_id, rettype="fasta")
+
+# for we want to do multiple sequence alignment later, we save the sequences as
+# a fasta file
+fasta_file = "cov_protein_seqs.fasta"
+with open(fasta_file, "w") as fo:
+    fo.write(handle.read())
+    
+!cat cov_protein_seqs.fasta
+from Bio import SeqIO
+record = SeqIO.parse(open(fasta_file, 'r'),"fasta")
+
+for seq in record:
+    print("ID: {}, Length: {}".format(seq.id, len(seq)))
+
+from Bio.Align.Applications import ClustalOmegaCommandline
+
+aln_file = "align_cov_protein_seqs.fasta"
+cline = ClustalOmegaCommandline(infile=fasta_file, outfile=aln_file)
+
+print(cline)
+
+cline()
+
+from Bio import AlignIO
+align = AlignIO.read(aln_file, "fasta")
+
+from Bio.Phylo.TreeConstruction import DistanceCalculator
+from Bio.Phylo.TreeConstruction import DistanceTreeConstructor
+
+calculator = DistanceCalculator('blosum62')
+dm = calculator.get_distance(align)
+
+constructor = DistanceTreeConstructor()
+tree = constructor.upgma(dm)
+
+import matplotlib.pyplot as plt
+from Bio import Phylo
+
+# annote each sequence by the virus subtype
+virus_subtype_mapping = {
+    "YP_009724390.1": "COVID19",
+    "YP_009825051.1": "SARS",
+    "YP_009555241.1": "OC43",
+    "NP_073551.1": "229E",
+    "YP_003767.1": "NL63",
+    "YP_173238.1": "HKU1",
+    "YP_009047204.1": "MERS"
+}
+fig, ax = plt.subplots(dpi=150)
+Phylo.draw(tree, axes=ax,
+           label_func=lambda n: virus_subtype_mapping[str(n)]
+                                if str(n) in virus_subtype_mapping else str(n))
+                                
+import pandas as pd
+
+aln = AlignIO.read(open(aln_file), 'fasta')
+align_df = pd.DataFrame(dict([(virus_subtype_mapping[rec.name], list(rec.seq))
+                              for rec in aln]))
+                              
+align_df
+
+# identify reference index using COVID19
+aa_index = (align_df["COVID19"] != "-").cumsum()
+aa_count = align_df.apply(lambda row: row.nunique(), axis=1)
+
+align_df["aa_index"] = aa_index
+
+# Calculate maximum mutations per position
+muts_per_index = aa_count.groupby(aa_index).max()
+
+import seaborn as sns
+
+sns.lineplot(x=muts_per_index.index.values, y=muts_per_index.values)
+
+# most varied positions
+align_df[align_df.aa_index.isin(muts_per_index[muts_per_index == 7].index.values)]
